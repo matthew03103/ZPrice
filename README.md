@@ -1,3 +1,3 @@
 # ZPrice
 
-https://matthew03103.github.io/ZPrice/website/home
+https://matthew03103.github.io/ZPrice/public/index
