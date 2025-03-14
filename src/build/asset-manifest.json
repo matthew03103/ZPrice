@@ -1,0 +1,15 @@
+{
+  "files": {
+    "main.css": "/zyn-price/static/css/main.323d7611.css",
+    "main.js": "/zyn-price/static/js/main.8b3d8590.js",
+    "static/js/453.ceeefc7b.chunk.js": "/zyn-price/static/js/453.ceeefc7b.chunk.js",
+    "index.html": "/zyn-price/index.html",
+    "main.323d7611.css.map": "/zyn-price/static/css/main.323d7611.css.map",
+    "main.8b3d8590.js.map": "/zyn-price/static/js/main.8b3d8590.js.map",
+    "453.ceeefc7b.chunk.js.map": "/zyn-price/static/js/453.ceeefc7b.chunk.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.323d7611.css",
+    "static/js/main.8b3d8590.js"
+  ]
+}
