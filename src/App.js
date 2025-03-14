@@ -1,126 +1,107 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import Button from "./components/ui/button.js"; // Adjust path if needed
-import gasStationIcon from "./components/images/GasIcon.png"; // Import the gas station icon
-import axios from "axios"; // Import axios for API calls
+import Button from "./components/ui/button.js";
+import gasStationIcon from "./components/images/GasIcon.png";
 
-// Create a custom gas station icon
+// Firebase Imports
+import { firestore } from "./firebase";
+import { doc, setDoc, getDoc } from "firebase/firestore";
+
+// Custom gas station icon
 const customGasStationIcon = new L.Icon({
-  iconUrl: gasStationIcon, // Use the imported image
-  iconSize: [25, 25], // Size of the icon
-  iconAnchor: [12, 25], // Point of the icon that will correspond to the marker's location
-  popupAnchor: [0, -25], // Point from which the popup should open relative to the iconAnchor
+  iconUrl: gasStationIcon,
+  iconSize: [25, 25],
+  iconAnchor: [12, 25],
+  popupAnchor: [0, -25],
 });
 
 const App = () => {
   const [gasStations, setGasStations] = useState([]);
-  const [prices, setPrices] = useState({}); // Store prices for each gas station
-  const [selectedLocation, setSelectedLocation] = useState(null); // Store the selected location
+  const [prices, setPrices] = useState({});
+  const [userPosition, setUserPosition] = useState(null);
   const mapRef = useRef(null);
 
-  // Default map center (centered on the contiguous US)
   const defaultPosition = [37.0902, -95.7129];
 
-  // Handle adding/updating price for a gas station
-  const addPrice = async (lat, lon) => {
+  // Function to generate a Firestore-safe document ID
+  const generateDocId = (lat, lon) => {
+    return `${lat.toFixed(6)}-${lon.toFixed(6)}`; // Hyphen instead of underscore
+  };
+
+  // Add or update price for a gas station in Firestore
+  const addPrice = async (id, lat, lon) => {
     const userPrice = prompt("Enter the price you paid for Zyn:");
+
     if (userPrice && !isNaN(userPrice)) {
       try {
-        console.log("Adding/updating price for gas station at:", lat, lon); // Log location
-        const response = await axios.post("http://localhost:5000/api/prices", {
-          lat,
-          lon,
-          price: userPrice,
-        });
-        console.log("Update response:", response.data); // Log response
-        setPrices((prevPrices) => ({
-          ...prevPrices,
-          [response.data.id]: userPrice,
-        }));
-        setGasStations((prevStations) => [
-          ...prevStations,
-          { id: response.data.id, lat, lon },
-        ]);
+        const docId = generateDocId(lat, lon); // Ensure Firestore-safe ID
+        console.log("Updating Firestore with:", { docId, lat, lon, price: userPrice });
+
+        const gasStationRef = doc(firestore, "gasStations", docId);
+        await setDoc(gasStationRef, { lat, lon, price: userPrice }, { merge: true });
+
+        console.log("✅ Price successfully updated in Firestore.");
+        setPrices((prevPrices) => ({ ...prevPrices, [docId]: userPrice }));
       } catch (error) {
-        console.error("Error updating price:", error);
-        if (error.response) {
-          console.error("Response data:", error.response.data); // Log response data
-          console.error("Response status:", error.response.status); // Log status code
-        }
-        alert("Failed to update price. Please try again.");
+        console.error("❌ Firestore update error:", error.message, "Code:", error.code);
+        alert(`Firestore Error: ${error.message} (Code: ${error.code})`);
       }
     } else {
-      alert("Please enter a valid price.");
-    }
-  };
-
-  // Handle map click to select a gas station
-  const handleMapClick = (e) => {
-    const { lat, lng } = e.latlng;
-    setSelectedLocation({ lat, lng });
-  };
-
-  // Handle button click to add price
-  const handleAddPriceClick = () => {
-    if (selectedLocation) {
-      addPrice(selectedLocation.lat, selectedLocation.lng);
-    } else {
-      alert("Please select a location on the map first.");
+      alert("❌ Please enter a valid number for the price.");
     }
   };
 
   // Fetch gas stations from Overpass API
   const fetchGasStations = async (bbox) => {
     const overpassUrl = "https://overpass-api.de/api/interpreter";
-
     const query = `
       [out:json];
       node["amenity"="fuel"](${bbox});
       out body;
-      >;
-      out skel qt;
     `;
 
     try {
       const response = await fetch(overpassUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: `data=${encodeURIComponent(query)}`,
       });
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
-      }
+
+      if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+
       const data = await response.json();
       setGasStations(data.elements);
 
-      // Fetch prices for all gas stations
+      // Fetch prices from Firestore
       const pricePromises = data.elements.map(async (station) => {
+        if (!station.lat || !station.lon) return null;
+        const id = generateDocId(station.lat, station.lon);
+
         try {
-          const priceResponse = await axios.get(`http://localhost:5000/api/prices/${station.id}`);
-          return { id: station.id, price: priceResponse.data.price };
+          const gasStationRef = doc(firestore, "gasStations", id);
+          const gasStationDoc = await getDoc(gasStationRef);
+          return gasStationDoc.exists() ? { id, price: gasStationDoc.data().price } : { id, price: null };
         } catch (error) {
-          console.error("Error fetching price for station:", station.id, error);
-          return { id: station.id, price: null };
+          console.error("Firestore fetch error for station:", id, error);
+          return { id, price: null };
         }
       });
 
       const priceResults = await Promise.all(pricePromises);
       const newPrices = priceResults.reduce((acc, result) => {
-        acc[result.id] = result.price;
+        if (result) acc[result.id] = result.price;
         return acc;
       }, {});
-      setPrices((prevPrices) => ({ ...prevPrices, ...newPrices }));
+      setPrices(newPrices);
     } catch (error) {
       console.error("Error fetching gas stations:", error);
-      alert("Failed to fetch gas stations. Please try again.");
+      alert("Failed to fetch gas stations. Try again.");
     }
   };
 
-  // Handle query button click
+  // Handle Query Button Click
   const handleQueryClick = () => {
     if (mapRef.current) {
       const map = mapRef.current;
@@ -130,44 +111,59 @@ const App = () => {
     }
   };
 
+  // Get user's current location
+  const getUserLocation = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords;
+          setUserPosition([latitude, longitude]);
+          if (mapRef.current) {
+            mapRef.current.setView([latitude, longitude], 13);
+          }
+        },
+        (error) => {
+          console.error("Error getting user location:", error);
+          alert("Unable to retrieve your location.");
+        }
+      );
+    } else {
+      alert("Geolocation is not supported by your browser.");
+    }
+  };
+
+  // Automatically get user's location when the component mounts
+  useEffect(() => {
+    getUserLocation();
+  }, []);
+
   return (
     <div>
       <h1 style={{ textAlign: "center", padding: "10px" }}>Gas Stations & Zyn Prices</h1>
-      <MapContainer
-        center={defaultPosition}
-        zoom={4}
-        style={{ height: "80vh", width: "100%" }}
-        ref={mapRef}
-        onClick={handleMapClick} // Add click handler
-      >
+      <MapContainer center={userPosition || defaultPosition} zoom={13} style={{ height: "80vh", width: "100%" }} ref={mapRef}>
         <TileLayer
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         />
         {gasStations.map((station) => {
-          if (station.lat && station.lon) {
-            return (
-              <Marker
-                key={station.id}
-                position={[station.lat, station.lon]}
-                icon={customGasStationIcon}
-              >
-                <Popup>
-                  <div>
-                    <h3>Gas Station</h3>
-                    <p>Zyn Price: {prices[station.id] ? `$${prices[station.id]}` : "Not added yet"}</p>
-                    <Button onClick={() => addPrice(station.lat, station.lon)}>Update Price</Button>
-                  </div>
-                </Popup>
-              </Marker>
-            );
-          }
-          return null;
+          if (!station.lat || !station.lon) return null;
+          const id = generateDocId(station.lat, station.lon);
+
+          return (
+            <Marker key={id} position={[station.lat, station.lon]} icon={customGasStationIcon}>
+              <Popup>
+                <div>
+                  <h3>Gas Station</h3>
+                  <p>Zyn Price: {prices[id] ? `$${prices[id]}` : "Not added yet"}</p>
+                  <Button onClick={() => addPrice(id, station.lat, station.lon)}>Add/Update Price</Button>
+                </div>
+              </Popup>
+            </Marker>
+          );
         })}
       </MapContainer>
       <div style={{ textAlign: "center", marginTop: "10px" }}>
-        <Button onClick={handleAddPriceClick}>Add Price</Button>
-        <Button onClick={handleQueryClick} style={{ marginLeft: "10px" }}>Query Gas Stations</Button>
+        <Button onClick={handleQueryClick}>Query Gas Stations</Button>
       </div>
     </div>
   );
